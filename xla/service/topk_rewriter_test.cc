@@ -392,7 +392,7 @@ HloModule module
 )" + getComparatorNoIota() + R"(
 ENTRY cluster {
   %arg_tuple.1 = f32[8,1234567] parameter(0)
-  %sort.27 = f32[8,1234567] sort(%arg_tuple.1), dimensions={1}, is_stable=true, to_apply=%compare
+  %sort.27 = f32[8,1234567] sort(%arg_tuple.1), dimensions={1}, is_stable=true, to_apply=%compare, metadata={op_type="x" op_name="y"}
   ROOT %slice.29 = f32[8,5] slice(%sort.27), slice={[0:8], [0:5]}
 })";
   TF_ASSERT_OK_AND_ASSIGN(auto module,
@@ -403,9 +403,11 @@ ENTRY cluster {
     TF_ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
     TF_ASSERT_OK(HloDCE().Run(module.get()).status());
     ASSERT_TRUE(changed);
-    ASSERT_THAT(
-        module->entry_computation()->root_instruction(),
-        GmockMatch(m::GetTupleElement(m::CustomCall(m::Parameter(0)), 0)));
+    auto root = module->entry_computation()->root_instruction();
+    ASSERT_THAT(root, GmockMatch(m::GetTupleElement(
+                          m::CustomCall(m::Parameter(0)), 0)));
+    CHECK_EQ(root->metadata().op_type(), "x");
+    CHECK_EQ(root->metadata().op_name(), "y");
     const HloInstruction* cc =
         module->entry_computation()->root_instruction()->operand(0);
     ASSERT_THAT(cc->custom_call_target(), "TopK");
@@ -417,9 +419,15 @@ ENTRY cluster {
                           TopkDecomposer().Run(module.get()));
   EXPECT_TRUE(decomposer_changed);
   TF_ASSERT_OK(HloDCE().Run(module.get()).status());
-  EXPECT_THAT(module->entry_computation()->root_instruction(),
-              GmockMatch(m::Slice(
-                  m::Sort(m::Parameter(0)).WithPredicate(IsStableSort))));
+  auto root = module->entry_computation()->root_instruction();
+  HloInstruction* sort;
+  EXPECT_THAT(
+      root, GmockMatch(m::Slice(
+                m::Sort(&sort, m::Parameter(0)).WithPredicate(IsStableSort))));
+  CHECK_EQ(root->metadata().op_type(), "x");
+  CHECK_EQ(root->metadata().op_name(), "y");
+  CHECK_EQ(sort->metadata().op_type(), "x");
+  CHECK_EQ(sort->metadata().op_name(), "y");
   // ... and that it can become a topk again.
   run_topk_pass();
 }
